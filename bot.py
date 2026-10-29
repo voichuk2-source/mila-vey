@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
+from business import BusinessMixin
 
 LOG = logging.getLogger('mila')
 SYSTEM = '''You are Mila Vey, a fictional adult AI companion. Be warm, playful and concise.
@@ -133,13 +134,14 @@ class LocalAI:
         return reply[:3500]
 
 
-class Bot:
+class Bot(BusinessMixin):
     def __init__(self, tg, store, ai, admin, test_users=(), daily_limit=50):
         if not admin:
             raise ValueError('ADMIN_USER_ID required; no automatic first-user admin')
         self.tg, self.s, self.ai, self.admin = tg, store, ai, admin
         self.test_users = set(test_users) | {admin}
         self.daily_limit = daily_limit
+        self.init_business()
 
     def sales(self):
         return self.s.get('sales','off') == 'on'
@@ -204,10 +206,12 @@ class Bot:
     def admin_command(self, user, text, message):
         if user != self.admin:
             return False
+        if self.business_admin(user,text):
+            return True
         cmd, _, arg = text.partition(' ')
         if cmd == '/admin':
             self.tg.send(user,'Mila Vey · приватная админка\n'
-                '/status — режимы и статистика\n/public on|off — доступ всем\n/sales on|off — продажи\n'
+                '/status — режимы и статистика\n/business — подключение аккаунта\n/business_off — отключить автоответы\n/public on|off — доступ всем\n/sales on|off — продажи\n'
                 '/addphoto 100 Название — подпись к фото\n/catalog — каталог\n/hide ID — скрыть фото\n'
                 '/orders — последние заказы\n/refund НОМЕР — возврат Stars\n/retry — повторить выдачу оплаченных фото\n'
                 'Сначала проверь бесплатную переписку. Доступ к админке только у владельца.')
@@ -254,6 +258,12 @@ class Bot:
         return True
 
     def handle(self, update):
+        if 'business_connection' in update:
+            self.save_business_connection(update['business_connection'])
+            return
+        if 'business_message' in update:
+            self.handle_business_message(update['business_message'])
+            return
         if 'pre_checkout_query' in update:
             self.checkout(update['pre_checkout_query'])
             return
@@ -381,16 +391,17 @@ def main():
     offset = int(s.get('offset','0'))
     while True:
         try:
-            updates = tg.call('getUpdates',offset=offset,timeout=30,limit=1,allowed_updates=['message','pre_checkout_query'])
+            updates = tg.call('getUpdates',offset=offset,timeout=30,limit=1,allowed_updates=['message','pre_checkout_query','business_connection','business_message'])
             for update in updates:
                 try:
                     msg = update.get('message',{})
                     content = msg.get('text','')
-                    if content and not content.startswith('/') and msg.get('chat',{}).get('type')=='private':
+                    if 'business_message' in update or (content and not content.startswith('/') and msg.get('chat',{}).get('type')=='private'):
                         try:
                             pending.put_nowait(update)
                         except queue.Full:
-                            tg.send(msg['from']['id'],'I\'ve got a few messages to catch up on. Try me again shortly ✨')
+                            if 'business_message' not in update:
+                                tg.send(msg['from']['id'],'I\'ve got a few messages to catch up on. Try me again shortly ✨')
                     else:
                         bot.handle(update)
                 except Exception:
