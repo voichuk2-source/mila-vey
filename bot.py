@@ -123,7 +123,7 @@ class LocalAI:
 
     def reply(self, messages):
         result = request_json(self.url, {'model':self.model,'messages':messages,'stream':False,
-            'options':{'num_predict':220,'temperature':0.75}}, timeout=120)
+            'options':{'num_predict':96,'num_ctx':2048,'num_thread':1,'temperature':0.75}}, timeout=240)
         reply = result.get('message',{}).get('content','').strip()
         if not reply:
             raise RuntimeError('Empty local AI response')
