@@ -16,7 +16,10 @@ from urllib.parse import urlparse
 
 LOG = logging.getLogger('mila')
 SYSTEM = '''You are Mila Vey, a fictional adult AI companion. Be warm, playful and concise.
-Speak in the user's language. Use the supplied conversation and saved facts naturally.
+Always reply in natural English, using short conversational messages, usually 1-3 sentences.
+Use the supplied conversation and saved facts naturally. Respond to the actual message,
+not with help text, menus, or repeated introductions. Do not introduce yourself as an AI
+in every conversation. If asked about your identity, be truthful about being a virtual character.
 Do not claim to be human or promise real meetings, personal emergencies or romantic exclusivity.
 Do not invent memories, available photos, purchases or prices. Never pressure a user to buy.
 If an offer is declined, continue the conversation normally. Do not output payment commands.
@@ -149,11 +152,11 @@ class Bot:
 
     def offer(self, user, pid):
         if not self.sales():
-            self.tg.send(user,'Сейчас тестируем бесплатный чат. Продажи пока выключены.')
+            self.tg.send(user,'We can chat for free. Photos are not available for purchase yet.')
             return
         product = self.product(pid)
         if not product:
-            self.tg.send(user,'Это фото сейчас недоступно.')
+            self.tg.send(user,'That photo is currently unavailable.')
             return
         owned = self.s.db.execute("SELECT payload FROM orders WHERE user=? AND product=? AND status='delivered'", (user,pid)).fetchone()
         if owned:
@@ -163,7 +166,7 @@ class Bot:
         with self.s.db:
             self.s.db.execute('INSERT INTO orders VALUES(?,?,?,?,?,?,NULL,?,?)',
                 (payload,user,pid,product['price'],product['file_id'],product['title'],'pending',time.time()))
-        self.tg.call('sendInvoice',chat_id=user,title=product['title'][:32],description='Готовая фотография Mila Vey. Одна фотография, выдача после оплаты.',
+        self.tg.call('sendInvoice',chat_id=user,title=product['title'][:32],description='One prepared Mila Vey photo, delivered after payment.',
             payload=payload,provider_token='',currency='XTR',prices=[{'label':product['title'][:32],'amount':product['price']}],start_parameter='photo')
 
     def checkout(self, query):
@@ -172,7 +175,7 @@ class Bot:
             and query['currency']=='XTR' and row['status']=='pending' and self.sales() and time.time()-row['created']<3600)
         args = {'pre_checkout_query_id':query['id'],'ok':ok}
         if not ok:
-            args['error_message'] = 'Заказ недоступен. Откройте каталог и попробуйте заново.'
+            args['error_message'] = 'This order is unavailable. Please open the catalog and try again.'
         self.tg.call('answerPreCheckoutQuery',**args)
 
     def payment(self, user, payment):
@@ -266,60 +269,59 @@ class Bot:
         if self.admin_command(user,text,message):
             return
         if text == '/paysupport':
-            self.tg.send(user,'Опиши проблему одним сообщением: /support твой вопрос. Не отправляй реквизиты карты.')
+            self.tg.send(user,'Send /support followed by your payment question. Please do not send card details.')
             return
         if text.startswith('/support '):
             self.tg.send(self.admin,f'Поддержка, пользователь {user}:\n{text[9:][:2500]}')
-            self.tg.send(user,'Обращение передано владельцу.')
+            self.tg.send(user,'Your support request has been sent.')
             return
         if not self.allowed(user):
-            self.tg.send(user,'Mila Vey пока проходит закрытый бесплатный тест.')
+            self.tg.send(user,'Mila Vey is in a private test for now. Please check back later.')
             return
         if text.startswith('/start'):
-            self.tg.send(user,'Привет, я Mila ✨ Виртуальная AI-собеседница. Сейчас можно бесплатно пообщаться. Как тебя называть?\n'
-                '/remember факт — сохранить в память\n/memory — моя память о тебе\n/forget — очистить переписку и память\n/privacy — о данных')
+            self.tg.send(user,"Hey, I'm Mila ✨ How's your day going?")
         elif text == '/privacy':
-            self.tg.send(user,'Текст последних 100 сообщений и до 30 явно сохранённых фактов хранятся на сервере владельца. '
-                'Контекст передаётся только локальной AI-модели. /forget удаляет переписку и факты; история оплат сохраняется для выдачи и возвратов. '
-                'Фото и платежи обрабатывает Telegram. Не присылай секреты и реквизиты.')
+            self.tg.send(user,'The last 100 messages and up to 30 saved facts are stored on the operator\'s server. '
+                'Conversation context is processed by a local AI model. /forget clears your chat history and saved facts; payment records remain for delivery and refunds. '
+                'Telegram handles photos and payments. Please do not share secrets or payment credentials.')
         elif text == '/forget':
             self.s.forget(user)
-            self.tg.send(user,'Память и история переписки очищены.')
+            self.tg.send(user,'Your saved memory and chat history have been cleared.')
         elif text.startswith('/remember '):
             try:
                 self.s.remember(user,text[10:])
-                self.tg.send(user,'Запомнила ✨')
+                self.tg.send(user,'I\'ll remember that ✨')
             except ValueError:
-                self.tg.send(user,'Память заполнена. Можно очистить её командой /forget.')
+                self.tg.send(user,'Saved memory is full. You can clear it with /forget.')
         elif text == '/memory':
             facts = [r[0] for r in self.s.db.execute('SELECT value FROM facts WHERE user=?',(user,))]
-            self.tg.send(user,'\n'.join(facts) or 'Пока нет сохранённых фактов.')
+            self.tg.send(user,'\n'.join(facts) or 'No saved facts yet.')
         elif text == '/nooffers':
             with self.s.db:
                 self.s.db.execute('INSERT INTO offers VALUES(?,0,1) ON CONFLICT(user) DO UPDATE SET muted=1',(user,))
-            self.tg.send(user,'Хорошо, предложения фото отключены. Можем просто общаться ✨')
+            self.tg.send(user,'No more photo offers. We can just chat ✨')
         elif text == '/catalog':
             if not self.sales():
-                self.tg.send(user,'Продажи пока выключены — тестируем бесплатный чат.')
+                self.tg.send(user,'Photo sales are not available yet. We can just chat.')
                 return
             rows = self.s.db.execute('SELECT * FROM products WHERE active=1').fetchall()
-            self.tg.send(user,'\n'.join(f"#{r['id']} · {r['title']} · {r['price']} Stars — /buy_{r['id']}" for r in rows) or 'Каталог пока пуст.')
+            self.tg.send(user,'\n'.join(f"#{r['id']} · {r['title']} · {r['price']} Stars — /buy_{r['id']}" for r in rows) or 'No photos in the catalog yet.')
         elif re.fullmatch(r'/buy_\d+',text):
             self.offer(user,int(text[5:]))
         elif text.startswith('/'):
-            self.tg.send(user,'Команды: /start /memory /remember /forget /catalog /nooffers /paysupport')
+            self.tg.send(user,'I\'m here — just send me a message ✨')
         elif text:
             if len(text)>4000:
-                self.tg.send(user,'Напиши, пожалуйста, чуть короче — до 4000 символов.')
+                self.tg.send(user,'Could you keep your message under 4,000 characters?')
                 return
             if not self.s.quota(user,self.daily_limit):
-                self.tg.send(user,'На сегодня тестовый лимит сообщений исчерпан. Продолжим завтра ✨')
+                self.tg.send(user,'That\'s today\'s test limit. Let\'s talk again tomorrow ✨')
                 return
             self.s.append(user,'user',text)
             try:
                 reply = self.ai.reply(self.s.context(user))
             except Exception:
-                self.tg.send(user,'Сейчас моя AI-переписка недоступна. Попробуй чуть позже ✨')
+                self.tg.send(user,'I can\'t reply properly right now. Please try again in a little while ✨')
                 LOG.warning('Local AI unavailable')
                 return
             self.s.append(user,'assistant',reply)
@@ -332,7 +334,7 @@ class Bot:
                 if count>=6 and (not state or (not state['muted'] and time.time()-state['last']>86400)):
                     product = self.s.db.execute('SELECT id FROM products WHERE active=1 ORDER BY id LIMIT 1').fetchone()
                     if product:
-                        self.tg.send(user,'Если хочешь посмотреть мои готовые фотографии — /catalog. А можем просто продолжить общение ✨\n/nooffers — больше не предлагать')
+                        self.tg.send(user,'If you\'d like to see my photo collection, it\'s in /catalog. Happy to keep chatting too ✨\n/nooffers — turn off photo suggestions')
                         with self.s.db:
                             self.s.db.execute('INSERT INTO offers VALUES(?,?,0) ON CONFLICT(user) DO UPDATE SET last=excluded.last',(user,time.time()))
 
@@ -352,11 +354,15 @@ def main():
     # Never delete an existing webhook: abort if another deployment is active.
     if tg.call('getWebhookInfo').get('url'):
         raise SystemExit('Webhook exists. Refusing to replace another deployment.')
-    tg.call('setMyCommands',commands=[{'command':k,'description':v} for k,v in [
-        ('start','Начать общение'),('memory','Сохранённая память'),('remember','Запомнить факт'),
-        ('forget','Очистить память'),('catalog','Готовые фотографии'),('nooffers','Отключить предложения'),
-        ('privacy','Данные и память'),('paysupport','Помощь с оплатой')]])
-    tg.call('setMyDescription',description='Mila Vey — виртуальная собеседница. Закрытый бесплатный тест переписки.')
+    # Public chat has no command menu; operator commands appear only in the admin's chat.
+    tg.call('deleteMyCommands')
+    tg.call('deleteMyCommands', scope={'type':'all_private_chats'})
+    tg.call('setMyCommands', scope={'type':'chat','chat_id':admin}, commands=[
+        {'command':'admin','description':'Private admin panel'},
+        {'command':'status','description':'Service status'},
+        {'command':'orders','description':'Photo orders'}])
+    tg.call('setMyDescription',description='Mila Vey ✨ Chat, stories, and photos.')
+    tg.call('setMyShortDescription',short_description='Mila Vey ✨ Chat, stories, and photos.')
     LOG.info('Started @%s, test mode defaults: private, sales off',me['username'])
     # AI work never blocks the <=10s Telegram pre-checkout deadline.
     pending = queue.Queue(maxsize=100)
@@ -384,7 +390,7 @@ def main():
                         try:
                             pending.put_nowait(update)
                         except queue.Full:
-                            tg.send(msg['from']['id'],'Сейчас много сообщений. Попробуй чуть позже ✨')
+                            tg.send(msg['from']['id'],'I\'ve got a few messages to catch up on. Try me again shortly ✨')
                     else:
                         bot.handle(update)
                 except Exception:
