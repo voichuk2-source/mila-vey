@@ -32,6 +32,18 @@ class Tests(unittest.TestCase):
         return self.s.db.execute('SELECT * FROM orders').fetchone()['payload']
     def pay(self,payload,**kw):
         return dict(invoice_payload=payload,currency='XTR',total_amount=100,telegram_payment_charge_id='charge1',**kw)
+    def test_start_is_english_conversation_without_command_dump(self):
+        self.b.handle(self.msg(2,'/start'))
+        text=self.t.calls[-1][1]['text']
+        self.assertIn("Hey, I'm Mila",text)
+        self.assertNotIn('/remember',text)
+        self.assertNotIn('AI',text)
+        self.assertFalse(any('а' <= c.lower() <= 'я' for c in text))
+    def test_free_text_uses_prior_conversation_without_commands(self):
+        self.b.handle(self.msg(2,'My name is Alex'))
+        self.b.handle(self.msg(2,'What did I just tell you?'))
+        self.assertTrue(any(m['content']=='My name is Alex' for m in self.ai.messages))
+        self.assertIn('Always reply in natural English',self.ai.messages[0]['content'])
     def test_default_no_sales(self):
         self.b.offer(2,1); self.assertFalse(any(m=='sendInvoice' for m,_ in self.t.calls))
     def test_admin_not_first_stranger(self):
