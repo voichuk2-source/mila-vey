@@ -32,6 +32,7 @@ install -d -m 750 -o mila-vey -g mila-vey "$TARGET" "$TARGET/data" "$TARGET/runt
 touch "$MARKER"
 # Stop only our managed services on a repeated install; never web projects.
 systemctl stop mila-vey.service mila-vey-ai.service 2>/dev/null || true
+install -m 640 -o root -g mila-vey "$SOURCE_DIR/business.py" "$TARGET/business.py"
 install -m 640 -o root -g mila-vey "$SOURCE_DIR/bot.py" "$TARGET/bot.py"
 # Preserve the configured identity and secret without printing either.
 if [[ ! -f "$TARGET/.env" ]]; then
