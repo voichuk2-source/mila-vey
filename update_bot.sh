@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 compile(Path(sys.argv[1]).read_text(),sys.argv[1],'exec')
 PY
+install -m 640 -o root -g mila-vey "$SOURCE_DIR/business.py" "$TARGET/business.py"
 install -m 640 -o root -g mila-vey "$SOURCE_DIR/bot.py" "$TARGET/bot.py.new"
 mv -f "$TARGET/bot.py.new" "$TARGET/bot.py"
 systemctl restart mila-vey.service
