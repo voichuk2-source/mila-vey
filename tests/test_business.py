@@ -38,6 +38,21 @@ class BusinessTests(unittest.TestCase):
         return {'business_message':msg}
     def approve(self): self.bot.business_admin(1,'/approve_business 900')
     def sent(self): return [p for m,p in self.tg.calls if m=='sendMessage' and p.get('business_connection_id')]
+    def test_named_tester_pinned_by_id_without_admin_access(self):
+        self.approve()
+        self.bot.business_admin(1,'/test_business @Obnibn')
+        self.bot.handle(self.message(**{'from':{'id':2,'username':'OBNIBN'}}))
+        self.assertEqual(self.s.get('business_tester_id'),'2')
+        self.assertEqual(len(self.sent()),1)
+        self.assertFalse(self.bot.business_admin(2,'/public on'))
+        self.assertFalse(self.bot.allowed(2))
+        self.bot.handle(self.message(message_id=78,**{'from':{'id':3,'username':'Obnibn'}}))
+        self.assertEqual(len(self.sent()),1)
+        self.bot.handle(self.message(message_id=79,**{'from':{'id':2,'username':'changed_name'}}))
+        self.assertEqual(len(self.sent()),2)
+        self.bot.business_admin(1,'/test_business_off')
+        self.bot.handle(self.message(message_id=80,**{'from':{'id':2,'username':'Obnibn'}}))
+        self.assertEqual(len(self.sent()),2)
     def test_no_processing_before_admin_approval(self):
         self.bot.handle(self.message()); self.assertEqual(self.ai.calls,[])
     def test_stranger_cannot_approve(self):
