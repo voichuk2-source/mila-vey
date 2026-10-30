@@ -65,6 +65,14 @@ class BusinessMixin:
         if user != self.admin:
             return False
         cmd, _, arg = text.partition(' ')
+        if cmd == '/test_new_dialog':
+            tester = self.s.get('business_tester_id','')
+            if not tester:
+                self.tg.send(user,'Сначала тестовый аккаунт должен прислать хотя бы одно сообщение.')
+                return True
+            self.s.set('business_retest_user',tester)
+            self.tg.send(user,'Следующее сообщение тестового аккаунта начнёт новый диалог с минутной паузой. Память сохранена.')
+            return True
         if cmd == '/test_business':
             name = arg.strip().lstrip('@').lower()
             if not re.fullmatch(r'[a-z][a-z0-9_]{4,31}',name):
@@ -152,17 +160,22 @@ class BusinessMixin:
                 self.tg.send(message['chat']['id'],'Your chat history has been cleared.',business_connection_id=cid)
                 return
             previous_reply = self.s.db.execute("SELECT 1 FROM messages WHERE user=? AND role='assistant' LIMIT 1",(memory_user,)).fetchone()
+            last_activity = self.s.db.execute('SELECT MAX(created) FROM messages WHERE user=?',(memory_user,)).fetchone()[0]
+            idle = last_activity is not None and time.time()-last_activity >= 6*3600
+            retest = self.s.get('business_retest_user','') == str(user)
             self.s.append(memory_user,'user',text)
             first = self.s.db.execute('SELECT * FROM business_first_reply WHERE connection=? AND user=?',(cid,user)).fetchone()
+            delay = getattr(self,'first_reply_delay',60)
+            if delay>0 and (idle or retest or (not first and not previous_reply)):
+                with self.s.db:
+                    self.s.db.execute("INSERT OR REPLACE INTO business_first_reply VALUES(?,?,?,?,'pending')",(cid,user,time.time()+delay,json.dumps(message)))
+                if retest:
+                    self.s.set('business_retest_user','')
+                return
             if first and first['status']=='pending':
                 # Keep the original deadline; retain each incoming message in the context.
                 with self.s.db:
                     self.s.db.execute('UPDATE business_first_reply SET payload=? WHERE connection=? AND user=?',(json.dumps(message),cid,user))
-                return
-            delay = getattr(self,'first_reply_delay',60)
-            if not first and not previous_reply and delay>0:
-                with self.s.db:
-                    self.s.db.execute("INSERT INTO business_first_reply VALUES(?,?,?,?,'pending')",(cid,user,time.time()+delay,json.dumps(message)))
                 return
         else:
             # A restart reloads pending work from SQLite; retry after failures, without a busy loop.
