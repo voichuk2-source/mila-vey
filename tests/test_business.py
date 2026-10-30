@@ -55,6 +55,37 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(len(self.sent()),2)
     def test_no_processing_before_admin_approval(self):
         self.bot.handle(self.message()); self.assertEqual(self.ai.calls,[])
+    def test_new_session_after_six_hours_delays_read_and_keeps_memory(self):
+        from unittest.mock import patch
+        self.tg.connection['rights']['can_read_messages']=True
+        self.approve()
+        now=time.time()
+        with patch('business.time.time',return_value=now):
+            self.bot.handle(self.message(text='My name is Alex'))
+        self.bot.first_reply_delay=60
+        with patch('business.time.time',return_value=now+6*3600):
+            self.bot.handle(self.message(message_id=78,text='Back again'))
+            self.bot.flush_business_pending()
+        self.assertEqual(len(self.sent()),1)
+        self.assertEqual(len([m for m,_ in self.tg.calls if m=='readBusinessMessage']),1)
+        with patch('business.time.time',return_value=now+6*3600+30):
+            self.bot.handle(self.message(message_id=79,text='Remember me?'))
+        with patch('business.time.time',return_value=now+6*3600+60):
+            self.bot.flush_business_pending()
+        self.assertEqual(len(self.sent()),2)
+        self.assertTrue(any(m['content']=='My name is Alex' for m in self.ai.calls[-1]))
+
+    def test_admin_can_retest_delay_without_deleting_history(self):
+        self.approve()
+        self.s.set('business_tester_id','1')
+        self.bot.handle(self.message(text='Remember Alex'))
+        self.bot.first_reply_delay=60
+        self.assertFalse(self.bot.business_admin(2,'/test_new_dialog'))
+        self.bot.business_admin(1,'/test_new_dialog')
+        self.bot.handle(self.message(message_id=78,text='Hello again'))
+        self.assertEqual(len(self.sent()),1)
+        self.assertTrue(any(m['content']=='Remember Alex' for m in self.s.context(-1)))
+        self.assertEqual(self.s.get('business_retest_user'),'')
     def test_sticker_read_and_answer_only_after_first_minute(self):
         from unittest.mock import patch
         self.bot.first_reply_delay=60
