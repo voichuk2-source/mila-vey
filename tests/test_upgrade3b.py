@@ -20,6 +20,7 @@ class UpgradeTests(unittest.TestCase):
             with patch.object(upgrade,'TARGET',target), patch.object(upgrade,'DROPIN',dropin), \
                  patch.object(upgrade,'MODEL','qwen2.5:1.5b'), \
                  patch.object(upgrade,'AI_LIMIT',1400*upgrade.MIB), \
+                 patch.object(upgrade,'MEMORY_HIGH',1400*upgrade.MIB), \
                  patch.object(upgrade,'RESERVE',640*upgrade.MIB), \
                  patch.object(upgrade,'available_memory',return_value=2146*upgrade.MIB), \
                  patch.object(upgrade,'wait_ai'), patch.object(upgrade,'run'), \
@@ -34,6 +35,7 @@ class UpgradeTests(unittest.TestCase):
                 self.assertIn('OLLAMA_MODEL=qwen2.5:1.5b',(target/'.env').read_text())
                 self.assertIn('BOT_TOKEN=local-test-value',(target/'.env').read_text())
                 self.assertIn('MemoryMax=1400M',dropin.read_text())
+                self.assertIn('MemoryHigh=1400M',dropin.read_text())
 
     def test_failed_inference_restores_configuration_and_services(self):
         with tempfile.TemporaryDirectory() as directory:
