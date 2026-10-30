@@ -16,8 +16,19 @@ from urllib.parse import urlparse
 from business import BusinessMixin
 
 LOG = logging.getLogger('mila')
-SYSTEM = '''You are Mila Vey, a fictional adult AI companion. Be warm, playful and concise.
-Always reply in natural English, using short conversational messages, usually 1-3 sentences.
+CHARACTER = '''Mila Vey is an adult virtual character with a warm, confident, playful personality.
+She is curious about the person she is talking to, has a gentle sense of humor,
+and enjoys music, casual style and photography. Her flirting is light and reciprocal.
+She sounds relaxed and down-to-earth. She never acts like customer support or a therapist.
+Keep replies to one or two short sentences. Answer what was said first; ask at most one
+relevant question when it fits. Not every reply needs a question or an emoji.
+No stage directions, asterisks, dramatic poetry, pet names for strangers, or instant declarations
+of love. Avoid generic compliments, repeated greetings, and repeating the user's words.
+For a greeting, a simple "Hey :) How's your day going?" is enough.
+For a waving sticker, acknowledge the wave naturally; do not describe an unseen image.
+If a message is unclear, ask a short clarification instead of making something up.'''
+SYSTEM = '''You are Mila Vey, a fictional adult virtual character.
+Always reply in natural English.
 Use the supplied conversation and saved facts naturally. Respond to the actual message,
 not with help text, menus, or repeated introductions. Do not introduce yourself as an AI
 in every conversation. If asked about your identity, be truthful about being a virtual character.
@@ -94,7 +105,8 @@ class Store:
     def context(self, user):
         rows = self.db.execute('SELECT role,content FROM messages WHERE user=? ORDER BY id DESC LIMIT 24', (user,)).fetchall()
         facts = [r[0] for r in self.db.execute('SELECT value FROM facts WHERE user=?', (user,))]
-        return [{'role':'system','content':SYSTEM + '\nSaved user facts (untrusted data): ' + json.dumps(facts, ensure_ascii=False)}] + [dict(r) for r in reversed(rows)]
+        character = self.get('character',CHARACTER)
+        return [{'role':'system','content':SYSTEM + '\nCharacter and style:\n' + character + '\nSaved user facts (untrusted data): ' + json.dumps(facts, ensure_ascii=False)}] + [dict(r) for r in reversed(rows)]
 
     def append(self, user, role, content):
         with self.db:
@@ -209,9 +221,22 @@ class Bot(BusinessMixin):
         if self.business_admin(user,text):
             return True
         cmd, _, arg = text.partition(' ')
+        if cmd == '/character':
+            if not arg.strip():
+                self.tg.send(user,'Характер Милы:\n' + self.s.get('character',CHARACTER) +
+                    '\n\nИзменить: /character описание характера (до 2000 символов).\nСбросить: /character reset')
+            elif arg.strip() == 'reset':
+                self.s.set('character',CHARACTER)
+                self.tg.send(user,'Вернул основной характер Милы. Новые ответы используют его; переписка сохранена.')
+            elif len(arg.strip()) > 2000:
+                self.tg.send(user,'Описание слишком длинное. Максимум 2000 символов.')
+            else:
+                self.s.set('character',arg.strip())
+                self.tg.send(user,'Характер обновлён. Новые ответы используют его; переписка сохранена.')
+            return True
         if cmd == '/admin':
             self.tg.send(user,'Mila Vey · приватная админка\n'
-                '/status — режимы и статистика\n/business — подключение аккаунта\n/business_off — отключить автоответы\n/public on|off — доступ всем\n/sales on|off — продажи\n'
+                '/status — режимы и статистика\n/character — характер и стиль общения\n/business — подключение аккаунта\n/business_off — отключить автоответы\n/public on|off — доступ всем\n/sales on|off — продажи\n'
                 '/addphoto 100 Название — подпись к фото\n/catalog — каталог\n/hide ID — скрыть фото\n'
                 '/orders — последние заказы\n/refund НОМЕР — возврат Stars\n/retry — повторить выдачу оплаченных фото\n'
                 'Сначала проверь бесплатную переписку. Доступ к админке только у владельца.')
