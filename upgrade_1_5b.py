@@ -13,4 +13,6 @@ if __name__=='__main__':
     upgrade.MODEL='qwen2.5:1.5b'
     upgrade.AI_LIMIT=1400*upgrade.MIB
     upgrade.RESERVE=640*upgrade.MIB
+    # Avoid reclaim throttling below the working set; retain the 1400 MiB hard cap.
+    upgrade.MEMORY_HIGH=upgrade.AI_LIMIT
     upgrade.cli()
