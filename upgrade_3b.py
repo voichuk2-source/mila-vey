@@ -80,7 +80,7 @@ def main():
     settings=Store(TARGET/'data/mila.sqlite3')
     try:
         if settings.get('public','off')!='off' or settings.get('sales','off')!='off':
-            raise RuntimeError('3B trial requires public=off and sales=off')
+            raise RuntimeError('Model trial requires public=off and sales=off')
         character=settings.get('character',CHARACTER)
     finally:
         settings.db.close()
@@ -100,11 +100,13 @@ def main():
     try:
         changed=True
         run('systemctl','stop','mila-vey.service','mila-vey-ai.service')
-        atomic_write(DROPIN,b'[Service]\nMemoryHigh=2100M\nMemoryMax=2300M\nMemorySwapMax=0\n',0o644)
+        high = AI_LIMIT//MIB-200
+        limit = AI_LIMIT//MIB
+        atomic_write(DROPIN,f'[Service]\nMemoryHigh={high}M\nMemoryMax={limit}M\nMemorySwapMax=0\n'.encode(),0o644)
         run('systemctl','daemon-reload')
         run('systemctl','start','mila-vey-ai.service')
         wait_ai()
-        print('Скачиваю Qwen 2.5 3B для закрытого теста. Старую модель сохраняю.',flush=True)
+        print(f'Скачиваю {MODEL} для закрытого теста. Старую модель сохраняю.',flush=True)
         run('runuser','-u','mila-vey','--','env','OLLAMA_HOST=127.0.0.1:11435',
             str(TARGET/'runtime/bin/ollama'),'pull',MODEL,timeout=1800)
         print('Проверяю реальный диалог с характером Милы…',flush=True)
@@ -129,7 +131,7 @@ def main():
         for unit in ('mila-vey.service','mila-vey-ai.service'):
             run('systemctl','is-active','--quiet',unit)
         success=True
-        print('ГОТОВО: включена Qwen 2.5 3B. Закрытый тест; память и настройки сохранены. '
+        print(f'ГОТОВО: включена {MODEL}. Закрытый тест; память и настройки сохранены. '
               'Качество ответов в Telegram ещё нужно оценить.')
         return 0
     finally:
@@ -145,7 +147,7 @@ def main():
             run('systemctl','start','mila-vey-ai.service','mila-vey.service')
 
 
-if __name__=='__main__':
+def cli():
     try:
         sys.exit(main())
     except KeyboardInterrupt:
@@ -155,3 +157,7 @@ if __name__=='__main__':
         # Never print credentials or environment-file contents from exceptions.
         print('Переход не завершён. Пришли последние строки терминала без токенов.')
         sys.exit(1)
+
+
+if __name__=='__main__':
+    cli()
