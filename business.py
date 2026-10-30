@@ -1,6 +1,7 @@
 """Approved business-account text replies; no sales or operator commands in customer chats."""
 import time
 import json
+import re
 
 
 class BusinessMixin:
@@ -36,6 +37,20 @@ class BusinessMixin:
         if user != self.admin:
             return False
         cmd, _, arg = text.partition(' ')
+        if cmd == '/test_business':
+            name = arg.strip().lstrip('@').lower()
+            if not re.fullmatch(r'[a-z][a-z0-9_]{4,31}',name):
+                self.tg.send(user,'Используй /test_business @username тестового аккаунта.')
+                return True
+            self.s.set('business_tester_username',name)
+            self.s.set('business_tester_id','')
+            self.tg.send(user,f'Закрытый тест для @{name}. Напиши с него в личку аккаунта Милы. ID закрепится по первому входящему сообщению. Доступа к админке нет.')
+            return True
+        if cmd == '/test_business_off':
+            self.s.set('business_tester_username','')
+            self.s.set('business_tester_id','')
+            self.tg.send(user,'Доступ тестового аккаунта выключен.')
+            return True
         if cmd == '/business':
             rows = self.s.db.execute('SELECT owner,username,enabled,can_reply FROM business_connections').fetchall()
             self.tg.send(user,'\n'.join(f"@{r['username']} · ID {r['owner']} · active={r['enabled']} · reply={r['can_reply']}" for r in rows)
@@ -61,7 +76,7 @@ class BusinessMixin:
         self.save_business_connection(connection,notify=False)
         self.s.set('business_owner',arg)
         self.s.set('business_connection',connection['id'])
-        self.tg.send(user,'Аккаунт подтверждён. При public=off отвечаю только тебе. Напиши обычное Hi в личку аккаунта Милы с твоего админского аккаунта.')
+        self.tg.send(user,'Аккаунт подтверждён. Закрытый тест: администратор и тестовый аккаунт /test_business @username. Напиши Hi с другого аккаунта в личку Милы.')
         return True
 
     def flush_business_pending(self):
@@ -80,7 +95,10 @@ class BusinessMixin:
         if not user or sender.get('is_bot') or message.get('sender_business_bot'):
             return
         owner = int(self.s.get('business_owner','0'))
-        if user==owner or not self.allowed(user):
+        tester = self.s.get('business_tester_id','')
+        expected = self.s.get('business_tester_username','')
+        matching_tester = (str(user)==tester if tester else bool(expected and sender.get('username','').lower()==expected))
+        if user==owner or not (self.allowed(user) or matching_tester):
             return
         if time.time()-message.get('date',0)>86400:
             return
@@ -91,6 +109,8 @@ class BusinessMixin:
         connection = self.tg.call('getBusinessConnection',business_connection_id=cid)
         if connection['user']['id']!=owner or not connection.get('is_enabled') or not connection.get('rights',{}).get('can_reply'):
             return
+        if matching_tester and not tester:
+            self.s.set('business_tester_id',str(user))
         memory_user = -user
         if not scheduled:
             with self.s.db:
