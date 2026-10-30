@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 TARGET = Path('/opt/mila-vey')
 DROPIN = Path('/etc/systemd/system/mila-vey-ai.service.d/30-model-3b.conf')
@@ -17,6 +18,18 @@ MODEL = 'qwen2.5:3b'
 MIB = 1024**2
 AI_LIMIT = 2300*MIB
 RESERVE = 768*MIB
+MEMORY_HIGH = None
+
+
+def memory_diagnostics():
+    try:
+        group=run('systemctl','show','-p','ControlGroup','--value','mila-vey-ai.service',capture=True).strip()
+        root=Path('/sys/fs/cgroup')/group.lstrip('/')
+        for name in ('memory.events','memory.current','memory.peak'):
+            path=root/name
+            if path.is_file(): print(name+': '+path.read_text().strip().replace('\n','; '),flush=True)
+    except Exception:
+        print('Счётчики памяти недоступны.',flush=True)
 
 
 def run(*args, timeout=60, capture=False):
@@ -76,12 +89,12 @@ def main():
         run('systemctl','is-active','--quiet',unit)
     sys.dont_write_bytecode=True
     sys.path.insert(0,str(TARGET))
-    from bot import Store, SYSTEM, CHARACTER
+    from bot import Store, SYSTEM, AI_OPTIONS, AI_KEEP_ALIVE
     settings=Store(TARGET/'data/mila.sqlite3')
     try:
         if settings.get('public','off')!='off' or settings.get('sales','off')!='off':
             raise RuntimeError('Model trial requires public=off and sales=off')
-        character=settings.get('character',CHARACTER)
+        character=settings.character()
     finally:
         settings.db.close()
     capacity=available_memory()
@@ -97,31 +110,44 @@ def main():
     previous_dropin=DROPIN.read_bytes() if DROPIN.exists() else None
     changed=False
     success=False
+    stage='подготовка сервиса'
     try:
         changed=True
         run('systemctl','stop','mila-vey.service','mila-vey-ai.service')
-        high = AI_LIMIT//MIB-200
+        high = (MEMORY_HIGH//MIB) if MEMORY_HIGH is not None else AI_LIMIT//MIB-200
         limit = AI_LIMIT//MIB
         atomic_write(DROPIN,f'[Service]\nMemoryHigh={high}M\nMemoryMax={limit}M\nMemorySwapMax=0\n'.encode(),0o644)
         run('systemctl','daemon-reload')
         run('systemctl','start','mila-vey-ai.service')
         wait_ai()
+        stage='скачивание модели'
         print(f'Скачиваю {MODEL} для закрытого теста. Старую модель сохраняю.',flush=True)
         run('runuser','-u','mila-vey','--','env','OLLAMA_HOST=127.0.0.1:11435',
             str(TARGET/'runtime/bin/ollama'),'pull',MODEL,timeout=1800)
+        stage='предварительная загрузка модели'
+        print('Загружаю модель в память…',flush=True)
+        started=time.monotonic()
+        request({'model':MODEL,'messages':[],'stream':False,'keep_alive':AI_KEEP_ALIVE,'options':AI_OPTIONS})
+        print(f'Загрузка: {time.monotonic()-started:.1f} с.',flush=True)
         print('Проверяю реальный диалог с характером Милы…',flush=True)
         messages=[{'role':'system','content':SYSTEM+'\nCharacter and style:\n'+character}]
         for question in ('Hey Mila, how are you?', 'My name is Alex. I like evening walks.',
                          'What is my name? Answer in one short sentence.'):
+            stage='генерация ответа '+str(len(messages)//2+1)
             messages.append({'role':'user','content':question})
-            result=request({'model':MODEL,'messages':messages,'stream':False,'keep_alive':'2m',
-                'options':{'num_ctx':2048,'num_thread':1,'num_predict':96,'temperature':0.6}})
+            started=time.monotonic()
+            result=request({'model':MODEL,'messages':messages,'stream':False,'keep_alive':AI_KEEP_ALIVE,
+                'options':AI_OPTIONS})
             answer=result.get('message',{}).get('content','').strip()
             if not answer: raise RuntimeError('Empty trial response')
+            print(f'Время ответа: {time.monotonic()-started:.1f} с. '
+                  f"Обработка запроса: {result.get('prompt_eval_duration',0)/1e9:.1f} с. "
+                  f"Генерация: {result.get('eval_duration',0)/1e9:.1f} с.",flush=True)
             print('Тест:',question,'\nMila:',answer[:600],flush=True)
             messages.append({'role':'assistant','content':answer})
         if 'alex' not in answer.lower():
             raise RuntimeError('Trial conversation memory check failed')
+        stage='включение модели в боте'
         lines=old_env.decode().splitlines()
         lines=[line for line in lines if not line.startswith('OLLAMA_MODEL=')]
         lines.append('OLLAMA_MODEL='+MODEL)
@@ -134,6 +160,14 @@ def main():
         print(f'ГОТОВО: включена {MODEL}. Закрытый тест; память и настройки сохранены. '
               'Качество ответов в Telegram ещё нужно оценить.')
         return 0
+    except Exception as exc:
+        reason='истёк лимит ожидания 240 секунд' if isinstance(exc,TimeoutError) else type(exc).__name__
+        if isinstance(exc,urllib.error.HTTPError): reason=f'локальная AI вернула HTTP {exc.code}'
+        if isinstance(exc,RuntimeError) and str(exc) in ('Empty trial response','Trial conversation memory check failed'):
+            reason='пустой ответ' if str(exc)=='Empty trial response' else 'модель не вспомнила имя из теста'
+        print(f'Ошибка. Этап: {stage}; причина: {reason}.',flush=True)
+        memory_diagnostics()
+        raise
     finally:
         if changed and not success:
             print('Тест не прошёл. Возвращаю прежнюю модель и лимиты Mila.',flush=True)
