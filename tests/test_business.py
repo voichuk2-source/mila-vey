@@ -55,6 +55,34 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(len(self.sent()),2)
     def test_no_processing_before_admin_approval(self):
         self.bot.handle(self.message()); self.assertEqual(self.ai.calls,[])
+    def test_sticker_read_and_answer_only_after_first_minute(self):
+        from unittest.mock import patch
+        self.bot.first_reply_delay=60
+        self.tg.connection['rights']['can_read_messages']=True
+        self.approve()
+        now=time.time()
+        with patch('business.time.time',return_value=now):
+            self.bot.handle(self.message(text='',sticker={'emoji':'👋','file_id':'unused'}))
+        self.assertFalse(any(m=='readBusinessMessage' for m,_ in self.tg.calls))
+        self.assertEqual(self.sent(),[])
+        with patch('business.time.time',return_value=now+59): self.bot.flush_business_pending()
+        self.assertFalse(any(m=='readBusinessMessage' for m,_ in self.tg.calls))
+        with patch('business.time.time',return_value=now+60): self.bot.flush_business_pending()
+        reads=[p for m,p in self.tg.calls if m=='readBusinessMessage']
+        self.assertEqual(reads,[{'business_connection_id':'connection-1','chat_id':1,'message_id':77}])
+        self.assertEqual(len(self.sent()),1)
+        self.assertTrue(any('👋' in m['content'] for m in self.ai.calls[0]))
+        self.bot.handle(self.message(message_id=78,text='Hello'))
+        self.assertEqual(len([m for m,_ in self.tg.calls if m=='readBusinessMessage']),2)
+        self.assertEqual(len(self.sent()),2)
+
+    def test_missing_read_right_does_not_block_reply_or_repeat_warning(self):
+        self.approve()
+        self.bot.handle(self.message())
+        self.bot.handle(self.message(message_id=78))
+        self.assertEqual(len(self.sent()),2)
+        warnings=[p for m,p in self.tg.calls if m=='sendMessage' and 'Нет права' in p.get('text','')]
+        self.assertEqual(len(warnings),1)
     def test_stranger_cannot_approve(self):
         self.assertFalse(self.bot.business_admin(2,'/approve_business 900'))
         self.assertIsNone(self.s.get('business_connection'))
