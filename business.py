@@ -5,6 +5,34 @@ import re
 
 
 class BusinessMixin:
+    @staticmethod
+    def business_text(message):
+        text = message.get('text','').strip()
+        if text:
+            return text
+        sticker = message.get('sticker')
+        if sticker:
+            emoji = str(sticker.get('emoji',''))[:32]
+            return (f'[The user sent a sticker. Associated emoji: {emoji or "unknown"}. '
+                    'The sticker image is unavailable. Respond naturally to the gesture; '
+                    'do not invent visual details.]')
+        return ''
+
+    def mark_business_read(self, message, connection):
+        cid = message['business_connection_id']
+        if not connection.get('rights',{}).get('can_read_messages'):
+            warning = 'Нет права отмечать сообщения прочитанными. В настройках подключённого бота включи «Отмечать как прочитанное». Ответы продолжают работать.'
+        else:
+            try:
+                self.tg.call('readBusinessMessage',business_connection_id=cid,
+                    chat_id=message['chat']['id'],message_id=message['message_id'])
+                return
+            except Exception:
+                warning = 'Telegram не разрешил отметить сообщение прочитанным. Проверь право «Отмечать как прочитанное» у подключённого бота.'
+        if self.s.get('business_read_warning','') != cid:
+            self.s.set('business_read_warning',cid)
+            self.tg.send(self.admin,warning)
+
     def init_business(self):
         self.s.db.executescript('''
         CREATE TABLE IF NOT EXISTS business_connections(
@@ -102,7 +130,7 @@ class BusinessMixin:
             return
         if time.time()-message.get('date',0)>86400:
             return
-        text = message.get('text','').strip()
+        text = self.business_text(message)
         if not text or len(text)>4000:
             return
         # Revalidate current rights before reading conversation memory or generating a reply.
@@ -142,6 +170,9 @@ class BusinessMixin:
                 changed = self.s.db.execute("UPDATE business_first_reply SET due=? WHERE connection=? AND user=? AND status='pending' AND due<=?",(time.time()+30,cid,user,time.time())).rowcount
             if not changed:
                 return
+        # No read receipt is sent while the first-contact timer is pending.
+        # Other Telegram clients opening this chat can still mark it read independently.
+        self.mark_business_read(message,connection)
         try:
             reply = self.ai.reply(self.s.context(memory_user))
         except Exception:
