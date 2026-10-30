@@ -51,6 +51,17 @@ class Tests(unittest.TestCase):
         self.b.handle(self.msg(1,'/sales on')); self.assertTrue(self.b.sales())
     def test_private_test(self):
         self.b.handle(self.msg(99,'hi')); self.assertIsNone(self.ai.messages)
+    def test_character_is_admin_only_persistent_and_keeps_history(self):
+        self.s.append(2,'user','My name is Alex')
+        self.b.handle(self.msg(2,'/character Change the shared persona'))
+        self.assertIsNone(self.s.get('character'))
+        self.b.handle(self.msg(1,'/character Warm, witty, concise.'))
+        other=Store(self.path)
+        prompt=other.context(-2)[0]['content']
+        self.assertIn('Warm, witty, concise.',prompt)
+        self.assertIn('be truthful',prompt)
+        self.assertTrue(any(m['content']=='My name is Alex' for m in other.context(2)))
+        other.db.close()
     def test_memory_isolated_persistent_and_forget(self):
         self.s.remember(2,'My cat is Luna'); self.s.append(2,'user','hello')
         other=Store(self.path)
