@@ -1,5 +1,6 @@
 """Approved business-account text replies; no sales or operator commands in customer chats."""
 import time
+import json
 
 
 class BusinessMixin:
@@ -9,6 +10,11 @@ class BusinessMixin:
             id TEXT PRIMARY KEY,owner INTEGER NOT NULL,username TEXT,enabled INTEGER,can_reply INTEGER);
         CREATE TABLE IF NOT EXISTS business_seen(connection TEXT,message INTEGER,
             PRIMARY KEY(connection,message));
+        ''')
+        self.s.db.execute('''
+        CREATE TABLE IF NOT EXISTS business_first_reply(
+            connection TEXT,user INTEGER,due REAL,payload TEXT,status TEXT,
+            PRIMARY KEY(connection,user))
         ''')
         self.s.db.commit()
 
@@ -58,7 +64,12 @@ class BusinessMixin:
         self.tg.send(user,'Аккаунт подтверждён. При public=off отвечаю только тебе. Напиши обычное Hi в личку аккаунта Милы с твоего админского аккаунта.')
         return True
 
-    def handle_business_message(self, message):
+    def flush_business_pending(self):
+        rows = self.s.db.execute("SELECT payload FROM business_first_reply WHERE status='pending' AND due<=?",(time.time(),)).fetchall()
+        for row in rows:
+            self.handle_business_message(json.loads(row['payload']), scheduled=True)
+
+    def handle_business_message(self, message, scheduled=False):
         cid = message.get('business_connection_id')
         if not cid or cid != self.s.get('business_connection',''):
             return
@@ -80,19 +91,37 @@ class BusinessMixin:
         connection = self.tg.call('getBusinessConnection',business_connection_id=cid)
         if connection['user']['id']!=owner or not connection.get('is_enabled') or not connection.get('rights',{}).get('can_reply'):
             return
-        with self.s.db:
-            inserted = self.s.db.execute('INSERT OR IGNORE INTO business_seen VALUES(?,?)',(cid,message['message_id'])).rowcount
-        if not inserted:
-            return
-        if not self.s.quota(user,self.daily_limit):
-            return
-        # Negative IDs separate personal-account history from the control bot's chat history.
         memory_user = -user
-        if text == '/forget':
-            self.s.forget(memory_user)
-            self.tg.send(message['chat']['id'],'Your chat history has been cleared.',business_connection_id=cid)
-            return
-        self.s.append(memory_user,'user',text)
+        if not scheduled:
+            with self.s.db:
+                inserted = self.s.db.execute('INSERT OR IGNORE INTO business_seen VALUES(?,?)',(cid,message['message_id'])).rowcount
+            if not inserted or not self.s.quota(user,self.daily_limit):
+                return
+            if text == '/forget':
+                self.s.forget(memory_user)
+                with self.s.db:
+                    self.s.db.execute("DELETE FROM business_first_reply WHERE connection=? AND user=? AND status='pending'",(cid,user))
+                self.tg.send(message['chat']['id'],'Your chat history has been cleared.',business_connection_id=cid)
+                return
+            previous_reply = self.s.db.execute("SELECT 1 FROM messages WHERE user=? AND role='assistant' LIMIT 1",(memory_user,)).fetchone()
+            self.s.append(memory_user,'user',text)
+            first = self.s.db.execute('SELECT * FROM business_first_reply WHERE connection=? AND user=?',(cid,user)).fetchone()
+            if first and first['status']=='pending':
+                # Keep the original deadline; retain each incoming message in the context.
+                with self.s.db:
+                    self.s.db.execute('UPDATE business_first_reply SET payload=? WHERE connection=? AND user=?',(json.dumps(message),cid,user))
+                return
+            delay = getattr(self,'first_reply_delay',60)
+            if not first and not previous_reply and delay>0:
+                with self.s.db:
+                    self.s.db.execute("INSERT INTO business_first_reply VALUES(?,?,?,?,'pending')",(cid,user,time.time()+delay,json.dumps(message)))
+                return
+        else:
+            # A restart reloads pending work from SQLite; retry after failures, without a busy loop.
+            with self.s.db:
+                changed = self.s.db.execute("UPDATE business_first_reply SET due=? WHERE connection=? AND user=? AND status='pending' AND due<=?",(time.time()+30,cid,user,time.time())).rowcount
+            if not changed:
+                return
         try:
             reply = self.ai.reply(self.s.context(memory_user))
         except Exception:
@@ -106,3 +135,5 @@ class BusinessMixin:
             return
         self.tg.send(message['chat']['id'],reply,business_connection_id=cid)
         self.s.append(memory_user,'assistant',reply)
+        with self.s.db:
+            self.s.db.execute("UPDATE business_first_reply SET status='done',payload='' WHERE connection=? AND user=?",(cid,user))
