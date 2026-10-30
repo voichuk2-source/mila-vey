@@ -380,13 +380,19 @@ def main():
     def chat_worker():
         worker = Bot(tg,Store(db_path),ai,admin,bot.test_users)
         while True:
-            job = pending.get()
             try:
-                worker.handle(job)
+                job = pending.get(timeout=1)
+            except queue.Empty:
+                job = None
+            try:
+                if job is not None:
+                    worker.handle(job)
+                worker.flush_business_pending()
             except Exception:
                 LOG.warning('Chat job failed')
             finally:
-                pending.task_done()
+                if job is not None:
+                    pending.task_done()
     threading.Thread(target=chat_worker,daemon=True).start()
     offset = int(s.get('offset','0'))
     while True:
