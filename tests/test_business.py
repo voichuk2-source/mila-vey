@@ -28,6 +28,7 @@ class BusinessTests(unittest.TestCase):
         self.s=Store(Path(self.temp.name)/'db')
         self.tg=Transport(); self.ai=AI()
         self.bot=Bot(self.tg,self.s,self.ai,1)
+        self.bot.first_reply_delay=0
         self.bot.save_business_connection(self.tg.connection,notify=False)
     def tearDown(self): self.s.db.close(); self.temp.cleanup()
     def message(self,**changes):
@@ -67,5 +68,35 @@ class BusinessTests(unittest.TestCase):
     def test_disconnect_while_generating_stops_reply(self):
         self.approve(); self.ai.on_reply=lambda:self.s.set('business_connection','')
         self.bot.handle(self.message()); self.assertEqual(self.sent(),[])
+
+    def test_first_reply_delayed_followups_combined_then_immediate(self):
+        from unittest.mock import patch
+        self.bot.first_reply_delay=60
+        self.approve()
+        now=time.time()
+        with patch('business.time.time',return_value=now):
+            self.bot.handle(self.message())
+            self.bot.handle(self.message(message_id=78,text='I am Alex'))
+            self.bot.flush_business_pending()
+        self.assertEqual(self.sent(),[])
+        with patch('business.time.time',return_value=now+59):
+            self.bot.flush_business_pending()
+        self.assertEqual(self.sent(),[])
+        with patch('business.time.time',return_value=now+61):
+            self.bot.flush_business_pending()
+            self.assertEqual(len(self.sent()),1)
+            self.assertTrue(any(m['content']=='I am Alex' for m in self.ai.calls[-1]))
+            self.bot.handle(self.message(message_id=79,text='How are you?'))
+        self.assertEqual(len(self.sent()),2)
+
+    def test_first_reply_deadline_survives_new_worker(self):
+        from unittest.mock import patch
+        self.bot.first_reply_delay=60
+        self.approve()
+        now=time.time()
+        with patch('business.time.time',return_value=now): self.bot.handle(self.message())
+        worker=Bot(self.tg,self.s,self.ai,1)
+        with patch('business.time.time',return_value=now+61): worker.flush_business_pending()
+        self.assertEqual(len(self.sent()),1)
 
 if __name__=='__main__': unittest.main()
