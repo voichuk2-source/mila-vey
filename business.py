@@ -2,6 +2,7 @@
 import time
 import json
 import re
+import secrets
 
 
 class BusinessMixin:
@@ -115,6 +116,45 @@ class BusinessMixin:
         self.tg.send(user,'Аккаунт подтверждён. Закрытый тест: администратор и тестовый аккаунт /test_business @username. Напиши Hi с другого аккаунта в личку Милы.')
         return True
 
+    @staticmethod
+    def business_identity_reply(text):
+        value = text.lower().strip()
+        if re.search(r"\b(are you real|are you an ai|are you artificial|are you a real person)\b", value):
+            return "I’m a virtual character, but I’m here for a real conversation 😉"
+        if re.search(r"\b(who are you|tell me about yourself|what is your name|what's your name|how old are you|where do you live)\b|кто ты|как тебя зовут|сколько тебе лет|где ты жив", value):
+            return "I’m Mila, a virtual 25-year-old creator from Eastern Europe, now in San Diego. I make photo content and I’m curious about acting. What about you? ✨"
+        return None
+
+    @staticmethod
+    def is_photo_request(text):
+        value = text.lower()
+        return bool(re.search(
+            r"\b(?:show|send|share|see|got|have|want)\b.{0,40}\b(?:photos?|pics?|pictures?|images?)\b|"
+            r"\b(?:photos?|pics?|pictures?|images?)\b.{0,30}\b(?:show|send|share|see)\b|"
+            r"покажи.{0,30}(?:фото|снимок)|пришли.{0,30}(?:фото|снимок)|фото покаж|покажи фото|"
+            r"покажи.{0,30}(?:фото|снимок)|покажи мені.{0,30}(?:фото|світлин)|скинь.{0,30}(?:фото|світлин)", value))
+
+    def business_photo_reply(self, message, text, connection_id):
+        user = message['from']['id']
+        if not self.sales():
+            reply = "I haven’t set up my photo collection here yet, but I’m happy to keep chatting with you 😉"
+            self.tg.send(message['chat']['id'],reply,business_connection_id=connection_id)
+            self.s.append(-user,'assistant',reply)
+            return True
+        product = self.s.db.execute('SELECT * FROM products WHERE active=1 AND price BETWEEN 1 AND 25000 ORDER BY id LIMIT 1').fetchone()
+        if not product:
+            reply = "I haven’t added a photo to my collection here yet. I can still keep you company 😉"
+            self.tg.send(message['chat']['id'],reply,business_connection_id=connection_id)
+            self.s.append(-user,'assistant',reply)
+            return True
+        self.tg.call('sendPaidMedia',business_connection_id=connection_id,
+            chat_id=message['chat']['id'],star_count=int(product['price']),
+            media=[{'type':'photo','media':product['file_id']}],
+            payload=f"mila-photo-{product['id']}-{user}-{secrets.token_urlsafe(8)}",
+            caption=product['title'][:1024],protect_content=True)
+        self.s.append(-user,'assistant',f"Sent a paid photo offer: {product['title']} ({product['price']} Stars).")
+        return True
+
     def flush_business_pending(self):
         rows = self.s.db.execute("SELECT payload FROM business_first_reply WHERE status='pending' AND due<=?",(time.time(),)).fetchall()
         for row in rows:
@@ -186,11 +226,20 @@ class BusinessMixin:
         # No read receipt is sent while the first-contact timer is pending.
         # Other Telegram clients opening this chat can still mark it read independently.
         self.mark_business_read(message,connection)
-        try:
-            reply = self.ai.reply(self.s.context(memory_user))
-        except Exception:
-            self.tg.send(self.admin,'Локальная модель не ответила в личке Милы. Проверь сервис mila-vey-ai.')
+        identity_reply = self.business_identity_reply(text)
+        if identity_reply is not None:
+            reply = identity_reply
+        elif self.is_photo_request(text):
+            self.business_photo_reply(message,text,cid)
+            with self.s.db:
+                self.s.db.execute("UPDATE business_first_reply SET status='done',payload='' WHERE connection=? AND user=?",(cid,user))
             return
+        else:
+            try:
+                reply = self.ai.reply(self.s.context(memory_user))
+            except Exception:
+                self.tg.send(self.admin,'Локальная модель не ответила в личке Милы. Проверь сервис mila-vey-ai.')
+                return
         # Re-check approval after slow inference, in case the owner paused replies.
         if cid != self.s.get('business_connection',''):
             return
